@@ -4,6 +4,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import authRoutes from "./controllers/authRoutes.js";
 import todoRoutes from "./controllers/todoRoutes.js";
+import prisma from "./db/prismaClient.js";
 
 dotenv.config();
 

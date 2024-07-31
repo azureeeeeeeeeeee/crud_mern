@@ -5,102 +5,100 @@ import jwt from "jsonwebtoken";
 import authenticateUser from "../middleware/authenticateUser.js";
 import sendEmail from "../utils/sendEmail.js";
 import crypto from "crypto";
+import prisma from "../db/prismaClient.js";
 
 const router = express.Router();
 
+// @ Register the username (username, email, password)
+// @ POST /register
 router.post("/register", async (req, res) => {
   const username = req.body.username;
   const email = req.body.email;
   const password = await bcrypt.hash(req.body.password, 10);
 
-  db.query(
-    "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
-    [username, email, password],
-    (err, queryRes) => {
-      if (err) {
-        return res.status(500).json({ message: "Failed to register user" });
-      }
+  if (!username || !email || !password) {
+    return res.status(404).json({ message: "Please input credentials" });
+  }
 
-      const token = crypto.randomBytes(32).toString("hex");
-      const userId = queryRes.insertId;
+  const user = await prisma.user.create({
+    data: {
+      username: username,
+      email: email,
+      password: password,
+    },
+  });
 
-      db.query(
-        "INSERT INTO tokens (user_id, token) VALUES (?, ?)",
-        [userId, token],
-        async (err, tokenRes) => {
-          if (err)
-            return res
-              .status(500)
-              .json({ message: "Failed to create verification token" });
-          const url = `${process.env.BASE_URL}/api/auth/users/${userId}/verify/${token}`;
-          await sendEmail(
-            email,
-            "Verify your email",
-            `Please verify your email by clicking on the following link : ${url}`
-          );
-        }
-      );
+  const token = crypto.randomBytes(32).toString("hex");
 
-      res.status(201).json({ message: "User registered successfully" });
-    }
+  await prisma.token.create({
+    data: {
+      token: token,
+      user: {
+        connect: {
+          id: user.id,
+        },
+      },
+    },
+  });
+
+  const url = `${process.env.BASE_URL}/api/auth/users/${user.id}/verify/${token}`;
+
+  await sendEmail(
+    email,
+    "Verify your email",
+    `Please verify your email by clicking on the following link : ${url}`
   );
 });
 
+// @ User login
+// @ POST /login
 router.post("/login", async (req, res) => {
   const email = req.body.email;
   const password = req.body.password;
 
-  db.query(
-    "SELECT * FROM users WHERE email = ?",
-    [email],
-    async (err, result) => {
-      if (err) {
-        console.log("Database query error: ", err);
-        return res.status(500).json({ message: "Internal server error" });
-      }
+  const user = await prisma.user.findUnique({
+    where: {
+      email: email,
+    },
+  });
 
-      if (result.length === 0) {
-        return res.status(401).json({ message: "Invalid email or password" });
-      }
+  if (!user) {
+    return res.status(404).json({ message: "Invalid email" });
+  }
 
-      const user = result[0];
+  if (!user.verified) {
+    return res.status(401).json({ message: "User not verified" });
+  }
 
-      if (!user.verified) {
-        return res.status(401).json({ message: "User has not been verified" });
-      }
-
-      try {
-        const match = await bcrypt.compare(password, user.password);
-
-        if (!match) {
-          return res.status(401).json({ message: "Invalid email or password" });
-        }
-
-        const token = jwt.sign(
-          {
-            userId: user.id,
-            username: user.username,
-            email: user.email,
-          },
-          "jwt-secret-key",
-          { expiresIn: "1d" }
-        );
-
-        res.cookie("auth_token", token, {
-          httpOnly: true,
-          secure: true,
-          maxAge: 86400000,
-        });
-
-        res.status(200).json({ message: "Login sucessful", token });
-      } catch (error) {
-        console.log(error);
-        res.status(500).json({ message: "Internal server error" });
-      }
+  try {
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(401).json({ message: "Invalid email or password" });
     }
-  );
+
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        username: user.username,
+        email: user.email,
+      },
+      "jwt-secret-key",
+      { expiresIn: "1d" }
+    );
+
+    res.cookie("auth_token", token, {
+      httpOnly: true,
+      secure: true,
+      maxAge: 86400000,
+    });
+    res.status(200).json({ message: "Login sucessful", token });
+  } catch (error) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
 });
 
+// @ User Logout
+// @ POST /logout
 router.post("/logout", (req, res) => {
   res.clearCookie("auth_token", {
     httpOnly: true,
@@ -114,42 +112,39 @@ router.post("/user", authenticateUser, (req, res) => {
   res.status(200).json({ message: "User is authorized" });
 });
 
+// @ Verify Token To Verify Email
+// @ GET /users/:id/verify/:token
 router.get("/users/:userId/verify/:token", async (req, res) => {
   const { userId, token } = req.params;
 
-  db.query(
-    "SELECT * FROM tokens WHERE user_id = ? AND token = ?",
-    [userId, token],
-    (err, result) => {
-      if (err) {
-        return res.status(500).json({ message: "Internal server error" });
-      }
-      if (result.length === 0)
-        return res.status(400).json({ message: "Invalid or expired token" });
+  const userToken = await prisma.token.findUnique({
+    where: {
+      user_id: parseInt(userId),
+      token,
+    },
+  });
 
-      db.query(
-        "UPDATE users SET verified = TRUE WHERE id = ?",
-        [userId],
-        (err) => {
-          if (err)
-            return res.status(500).json({ message: "Failed to update user" });
+  console.log(userToken);
 
-          db.query(
-            "DELETE FROM tokens WHERE user_id = ? AND token = ?",
-            [userId, token],
-            (err) => {
-              if (err)
-                return res
-                  .status(500)
-                  .json({ message: "Failed to delete token" });
+  if (!userToken) {
+    return res.status(400).json({ message: "Invalid or expired token" });
+  }
 
-              res.status(200).json({ message: "User successfully verified" });
-            }
-          );
-        }
-      );
-    }
-  );
+  // Verify user email if the token is valid
+  await prisma.user.update({
+    where: { id: parseInt(userId) },
+    data: { verified: true },
+  });
+
+  // Delete token from db
+  await prisma.token.delete({
+    where: {
+      user_id: parseInt(userId),
+      token,
+    },
+  });
+
+  res.status(200).json({ message: "User successfully verified" });
 });
 
 export default router;
