@@ -1,12 +1,16 @@
+import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import authRoutes from "./controllers/authRoutes.js";
 import todoRoutes from "./controllers/todoRoutes.js";
-import authenticateUser from "./middleware/authenticateUser.js";
+
+dotenv.config();
 
 // Creating an express app
 const app = express();
+
+const port = process.env.SERVER_PORT || 5000;
 
 // Using middleware
 app.use(express.json());
@@ -26,4 +30,4 @@ app.use("/api/auth", authRoutes);
 // Todo routes
 app.use("/api/todo", todoRoutes);
 
-app.listen(8000, () => console.log("Running. . ."));
+app.listen(port, () => console.log(`Server running on port ${port}. . .`));

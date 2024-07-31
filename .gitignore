@@ -1,3 +1,4 @@
-./frontend/node_modules
-./server/node_modules
-./server/route.md
+/frontend/node_modules
+/server/node_modules
+/server/route.md
+/server/.env
